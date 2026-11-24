@@ -1,0 +1,9 @@
+{
+  "plugin_id": "team-assistant",
+  "version": "1.1",
+  "permissions": [
+    "profile.read",
+    "drive.files.read",
+    "mail.send"
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "plugin_id": "office-helper",
+  "version": "   ",
+  "permissions": [
+    "documents.read"
+  ]
+}

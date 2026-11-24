@@ -1,0 +1,8 @@
+{
+  "plugin_id": "office-helper",
+  "version": "1.4.0",
+  "permissions": [
+    "documents.read",
+    "calendar.share"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "name": "team33-permission-review",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Учебный MVP команды 33: сравнение прав ИИ-плагина и согласование расширения доступа",
+  "scripts": {
+    "test": "node --test tests/core.test.js",
+    "test:e2e": "node tests/e2e-chrome.js"
+  }
+}

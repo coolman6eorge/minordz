@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Учебный манифест плагина",
+  "description": "Предлагаемый контракт учебного MVP, не стандарт ENISA или формат какой-либо платформы.",
+  "type": "object",
+  "required": [
+    "plugin_id",
+    "version",
+    "permissions"
+  ],
+  "properties": {
+    "plugin_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"
+    },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"
+      }
+    }
+  },
+  "additionalProperties": true
+}
