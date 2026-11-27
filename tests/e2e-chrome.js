@@ -224,10 +224,8 @@ function createHarness(cdp) {
     })()`);
   }
 
-  async function upload(side, fileName) {
+  async function chooseFile(side, filePath) {
     const inputId = side === 'old' ? 'old-file' : 'new-file';
-    const metaId = side === 'old' ? 'old-meta' : 'new-meta';
-    const filePath = path.join(ROOT, 'denis_cybersecurity', 'manifests', fileName);
 
     if (!fs.existsSync(filePath)) throw new Error(`Нет файла ${filePath}`);
 
@@ -243,30 +241,25 @@ function createHarness(cdp) {
       objectId
     });
     await cdp.send('Runtime.releaseObject', { objectId });
-
-    await waitFor(async () => {
-      const meta = await text(`#${metaId}`);
-      return meta.includes(path.basename(filePath)) && !meta.includes('чтение');
-    }, 5000, 40, `чтение ${fileName}`);
   }
 
-  async function uploadAbsolute(side, filePath) {
-    const inputId = side === 'old' ? 'old-file' : 'new-file';
+  async function waitForFileRead(side, filePath) {
     const metaId = side === 'old' ? 'old-meta' : 'new-meta';
-
-    const response = await cdp.send('Runtime.evaluate', {
-      expression: `document.getElementById(${JSON.stringify(inputId)})`,
-      objectGroup: 'e2e-upload'
-    });
-    const objectId = response.result && response.result.objectId;
-    if (!objectId) throw new Error(`Не найден input ${inputId}`);
-
-    await cdp.send('DOM.setFileInputFiles', { files: [filePath], objectId });
-    await cdp.send('Runtime.releaseObject', { objectId });
     await waitFor(async () => {
       const meta = await text(`#${metaId}`);
       return meta.includes(path.basename(filePath)) && !meta.includes('чтение');
     }, 5000, 40, `чтение ${path.basename(filePath)}`);
+  }
+
+  async function upload(side, fileName) {
+    const filePath = path.join(ROOT, 'denis_cybersecurity', 'manifests', fileName);
+    await chooseFile(side, filePath);
+    await waitForFileRead(side, filePath);
+  }
+
+  async function uploadAbsolute(side, filePath) {
+    await chooseFile(side, filePath);
+    await waitForFileRead(side, filePath);
   }
 
   async function reset() {
@@ -372,6 +365,8 @@ function createHarness(cdp) {
     click,
     fillComment,
     setRole,
+    chooseFile,
+    waitForFileRead,
     upload,
     uploadAbsolute,
     reset,
@@ -958,6 +953,91 @@ async function main() {
       assert((await harness.logRows()).length === 0, 'журнал при ошибке версий должен быть пустым');
     });
 
+    await uiCheck('R01 — устаревшая ошибка чтения не отравляет новую заявку', async () => {
+      await harness.reset();
+      const staleFile = path.join(ROOT, 'denis_cybersecurity', 'manifests', '01_current_v1.0.0.json');
+
+      await harness.evaluate(`(() => {
+        window.__team33OriginalFileText = File.prototype.text;
+        window.__team33StaleStarted = false;
+        window.__team33StaleRejected = false;
+        window.__team33RejectStaleRead = null;
+        File.prototype.text = function () {
+          if (this.name === '01_current_v1.0.0.json' && !window.__team33StaleStarted) {
+            window.__team33StaleStarted = true;
+            return new Promise((resolve, reject) => {
+              window.__team33RejectStaleRead = () => {
+                window.__team33StaleRejected = true;
+                reject(new Error('simulated delayed read failure'));
+              };
+            });
+          }
+          return window.__team33OriginalFileText.call(this);
+        };
+        return true;
+      })()`);
+
+      try {
+        await harness.chooseFile('old', staleFile);
+        await waitFor(async () => {
+          return harness.evaluate('window.__team33StaleStarted === true');
+        }, 2000, 20, 'старт отложенного чтения');
+
+        assertIncludes(await harness.text('#old-meta'), 'чтение', 'устаревший файл должен читаться');
+
+        await harness.click('example-btn');
+        assertArray(await harness.texts('#rights-list .right-id'), ['drive.files.read', 'mail.send'], 'актуальная пара после примера');
+        await harness.submit('Заявка на актуальную демонстрационную пару');
+        await harness.setRole('approver');
+        await harness.fillComment('Согласовать актуальную пару');
+        assert(!(await harness.isDisabled('approve-btn')), 'согласование актуальной заявки должно быть доступно');
+
+        const staleStarted = await harness.evaluate('window.__team33StaleStarted === true');
+        assert(staleStarted, 'устаревшее чтение должно оставаться незавершённым до явного сигнала');
+        const rejected = await harness.evaluate('(() => { if (!window.__team33RejectStaleRead) return false; window.__team33RejectStaleRead(); return true; })()');
+        assert(rejected, 'не удалось завершить устаревшее чтение ошибкой');
+        await waitFor(async () => {
+          return harness.evaluate('window.__team33StaleRejected === true');
+        }, 3000, 20, 'завершение устаревшего чтения');
+        await delay(100);
+
+        const alertAfterStale = await harness.alertText();
+        const statusAfterStale = await harness.text('#status-text');
+        const oldMetaAfterStale = await harness.text('#old-meta');
+
+        assertNotIncludes(alertAfterStale, 'Ошибка проверки данных', 'устаревшая ошибка не должна попадать в общий статус');
+        assertNotIncludes(alertAfterStale, 'Не удалось прочитать', 'устаревшая ошибка чтения не должна отображаться');
+        assertNotIncludes(oldMetaAfterStale, 'ошибка проверки', 'устаревший файл не должен подменять метаданные текущего');
+        assertIncludes(oldMetaAfterStale, 'manifest_old.json · версия 1.0', 'актуальные метаданные старого файла');
+        assertIncludes(statusAfterStale, 'Ожидает согласования', 'актуальная заявка должна остаться в ожидании');
+        assert((await harness.logRows()).length === 1, 'до решения должна оставаться одна запись');
+        assert(!(await harness.isDisabled('approve-btn')), 'согласование актуальной заявки должно оставаться доступным');
+
+        await harness.click('approve-btn');
+        assertIncludes(await harness.text('#status-text'), 'Новые права согласованы', 'согласование актуальной пары');
+        const rows = await harness.logRows();
+        assert(rows.length === 2, 'в журнале должно быть две записи актуальной пары');
+        assertIncludes(rows[1].text, 'Согласовано', 'решение записано');
+        assertIncludes(rows[1].text, 'team-assistant', 'решение относится к актуальной паре');
+        assertNotIncludes(rows[1].text, '01_current_v1.0.0.json', 'в журнал не должен попасть устаревший файл');
+      } finally {
+        try {
+          await harness.evaluate(`(() => {
+            if (window.__team33OriginalFileText) {
+              File.prototype.text = window.__team33OriginalFileText;
+            }
+            delete window.__team33OriginalFileText;
+            delete window.__team33StaleStarted;
+            delete window.__team33StaleRejected;
+            delete window.__team33RejectStaleRead;
+            return true;
+          })()`);
+        } catch {
+          // Если страница уже перезагружена, восстанавливать нечего.
+        }
+      }
+    });
+
     await uiCheck('После перезагрузки журнал и состояние исчезают (in-memory)', async () => {
       await harness.reset();
       await harness.click('example-btn');
@@ -1015,6 +1095,11 @@ async function main() {
       });
     }
 
+    const testsPass = results.filter((entry) => entry.status === 'PASS').length;
+    const testsFail = results.filter((entry) => entry.status === 'FAIL').length;
+    const uiPass = uiChecks.filter((entry) => entry.status === 'PASS').length;
+    const uiFail = uiChecks.filter((entry) => entry.status === 'FAIL').length;
+
     const summary = {
       environment: {
         browser: browserVersion,
@@ -1024,8 +1109,14 @@ async function main() {
       },
       summary: {
         total: results.length,
-        pass: results.filter((entry) => entry.status === 'PASS').length,
-        fail: results.filter((entry) => entry.status === 'FAIL').length
+        pass: testsPass,
+        fail: testsFail,
+        uiTotal: uiChecks.length,
+        uiPass,
+        uiFail,
+        overallTotal: results.length + uiChecks.length,
+        overallPass: testsPass + uiPass,
+        overallFail: testsFail + uiFail
       },
       tests: results,
       uiChecks
@@ -1039,11 +1130,13 @@ async function main() {
     );
 
     console.log('');
-    console.log(`Итого: ${summary.summary.pass}/${summary.summary.total} PASS, ${summary.summary.fail} FAIL`);
+    console.log(`Итого T/BROWSER: ${testsPass}/${results.length} PASS, ${testsFail} FAIL`);
+    console.log(`Итого UI: ${uiPass}/${uiChecks.length} PASS, ${uiFail} FAIL`);
+    console.log(`Всего: ${testsPass + uiPass}/${results.length + uiChecks.length} PASS, ${testsFail + uiFail} FAIL`);
     console.log(`Результаты: ${path.join(__dirname, 'e2e-results.json')}`);
     console.log(`Скриншоты: ${ARTIFACTS}`);
 
-    if (summary.summary.fail > 0 || uiChecks.some((entry) => entry.status === 'FAIL')) {
+    if (testsFail > 0 || uiFail > 0) {
       process.exitCode = 1;
     }
   } finally {

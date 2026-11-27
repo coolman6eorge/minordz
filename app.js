@@ -426,6 +426,21 @@ function initApp() {
     ];
   }
 
+  function isWorkflowRequestIntact() {
+    const comparison = state.comparison;
+    if (!comparison || activeErrors().length > 0) return false;
+    if (!state.old.manifest || !state.new.manifest) return false;
+
+    const result = compareManifests(
+      state.old.manifest,
+      state.new.manifest,
+      state.old.fileName,
+      state.new.fileName
+    );
+
+    return result.ok && result.request.requestKey === comparison.requestKey;
+  }
+
   function resetTransientState() {
     state.comparison = null;
     state.pairErrors = [];
@@ -599,7 +614,8 @@ function initApp() {
       dom.roleSelect.value = state.role;
     }
 
-    const hasNewRights = Boolean(state.comparison && state.comparison.newRights.length > 0);
+    const requestIntact = isWorkflowRequestIntact();
+    const hasNewRights = Boolean(requestIntact && state.comparison && state.comparison.newRights.length > 0);
     const hasComment = state.comment.trim().length > 0;
     const phase = state.approval.phase;
 
@@ -706,6 +722,10 @@ function initApp() {
     renderLog();
   }
 
+  function isCurrentFileLoad(side, token) {
+    return state[side].token === token;
+  }
+
   function setStatusErrorFromRead(side, fileName, error) {
     state[side].errors = [error];
     state[side].manifest = null;
@@ -727,7 +747,7 @@ function initApp() {
     render();
 
     if (file.size > MAX_FILE_BYTES) {
-      if (token !== current.token) return;
+      if (!isCurrentFileLoad(side, token)) return;
       setStatusErrorFromRead(side, file.name, makeError(
         file.name,
         'размер файла',
@@ -742,7 +762,7 @@ function initApp() {
     try {
       text = await file.text();
     } catch (error) {
-      if (token !== current.token) return;
+      if (!isCurrentFileLoad(side, token)) return;
       setStatusErrorFromRead(side, file.name, makeError(
         file.name,
         'файл',
@@ -753,16 +773,17 @@ function initApp() {
       return;
     }
 
-    if (token !== current.token) return;
+    if (!isCurrentFileLoad(side, token)) return;
 
+    const live = state[side];
     const parsed = parseManifestText(text, file.name);
-    current.loading = false;
+    live.loading = false;
     if (!parsed.ok) {
-      current.errors = parsed.errors;
-      current.manifest = null;
+      live.errors = parsed.errors;
+      live.manifest = null;
     } else {
-      current.errors = [];
-      current.manifest = parsed.manifest;
+      live.errors = [];
+      live.manifest = parsed.manifest;
     }
     render();
   }
@@ -848,7 +869,7 @@ function initApp() {
 
   function submitForApproval() {
     const request = state.comparison;
-    if (!request || request.newRights.length === 0) return;
+    if (!request || !isWorkflowRequestIntact() || request.newRights.length === 0) return;
     if (state.approval.phase !== 'none') return;
     if (state.role !== 'employee') return;
     const comment = state.comment.trim();
@@ -867,7 +888,7 @@ function initApp() {
 
   function decide(decision) {
     const request = state.comparison;
-    if (!request || request.newRights.length === 0) return;
+    if (!request || !isWorkflowRequestIntact() || request.newRights.length === 0) return;
     if (state.approval.phase !== 'submitted') return;
     if (state.role !== 'approver') return;
     if (state.approval.requestKey !== request.requestKey) return;
